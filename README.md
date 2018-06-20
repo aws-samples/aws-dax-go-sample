@@ -1,6 +1,6 @@
 ## AWS DAX SDK for Go Sample
 
-Sample code for DynamoDB Accelerator (DAX) Go Language SDK Client
+A sample application showing how to use DynamoDB Accelerator (DAX) Go Language SDK Client
 
 ## License Summary
 
