@@ -13,14 +13,17 @@ import (
 	"time"
 )
 
-var services = []string{"dynamodb", "dax"}
-var commands = []string{"create-table", "put-item", "get-item", "query", "scan", "delete-table"}
-
-var service = flag.String("service", "dynamodb", "dax | dynamodb")
-var region = flag.String("region", "us-west-2", "aws region")
-var endpoint = flag.String("endpoint", "", "dax cluster endpoint")
-var command = flag.String("command", "", strings.Join(commands, " | "))
-var verbose = flag.Bool("verbose", false, "verbose output")
+var (
+	services = []string{"dynamodb", "dax"}
+	commands = []string{"create-table", "put-item", "get-item", "query", "scan", "delete-table"}
+	
+	// flag args
+	service = flag.String("service", "dynamodb", "dax | dynamodb")
+	region = flag.String("region", "us-west-2", "aws region")
+	endpoint = flag.String("endpoint", "", "dax cluster endpoint")
+	command = flag.String("command", "", strings.Join(commands, " | "))
+	verbose = flag.Bool("verbose", false, "verbose output")
+)
 
 const (
 	table      = "TryDaxGoTable"
