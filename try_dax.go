@@ -7,19 +7,49 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
-	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
 	"os"
 	"strings"
 	"time"
 )
 
+type tableClient interface {
+	CreateTable(*dynamodb.CreateTableInput) (*dynamodb.CreateTableOutput, error)
+	DeleteTable(*dynamodb.DeleteTableInput) (*dynamodb.DeleteTableOutput, error)
+}
+
+type itemClient interface {
+	GetItem(*dynamodb.GetItemInput) (*dynamodb.GetItemOutput, error)
+	PutItem(*dynamodb.PutItemInput) (*dynamodb.PutItemOutput, error)
+	Query(*dynamodb.QueryInput) (*dynamodb.QueryOutput, error)
+	Scan(*dynamodb.ScanInput) (*dynamodb.ScanOutput, error)
+}
+
 var services = []string{"dynamodb", "dax"}
-var commands = []string{"create-table", "put-item", "get-item", "query", "scan", "delete-table"}
+
+var commandMap = map[string]func() error {
+	"create-table": executeCreateTable,
+	"delete-table": executeDeleteTable,
+	"put-item":     executePutItem,
+	"get-item":     executeGetItem,
+	"query":        executeQuery,
+	"scan":         executeScan,
+}
+
+func listOfKeys(m map[string]func() error) []string {
+	keys := make([]string, len(m))
+	i := 0
+	for key := range m {
+		keys[i] = key
+		i++
+	}
+	return keys
+}
+var commandsMsg = strings.Join(listOfKeys(commandMap), " | ")
 
 var service = flag.String("service", "dynamodb", "dax | dynamodb")
 var region = flag.String("region", "us-west-2", "aws region")
 var endpoint = flag.String("endpoint", "", "dax cluster endpoint")
-var command = flag.String("command", "", strings.Join(commands, " | "))
+var command = flag.String("command", "", commandsMsg)
 var verbose = flag.Bool("verbose", false, "verbose output")
 
 const (
@@ -38,36 +68,17 @@ func main() {
 		return
 	}
 
-	client, err := initClient()
-	if err != nil {
-		os.Stderr.WriteString(fmt.Sprintf("failed to init client: %v\n", err))
-		return
-	}
-
-	if err = executeCommand(client); err != nil {
+	if err := commandMap[*command](); err != nil {
 		os.Stderr.WriteString(fmt.Sprintf("failed to execute command: %v\n", err))
 	}
 }
 
-func executeCommand(client dynamodbiface.DynamoDBAPI) error {
-	switch *command {
-	case "create-table":
-		return executeCreateTable(client)
-	case "put-item":
-		return executePutItem(client)
-	case "get-item":
-		return executeGetItem(client)
-	case "query":
-		return executeQuery(client)
-	case "scan":
-		return executeScan(client)
-	case "delete-table":
-		return executeDeleteTable(client)
+func executeCreateTable() error {
+	client, err := initTableClient()
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("unknown command %s", *command)
-}
 
-func executeCreateTable(client dynamodbiface.DynamoDBAPI) error {
 	in := &dynamodb.CreateTableInput{
 		TableName: aws.String(table),
 		KeySchema: []*dynamodb.KeySchemaElement{
@@ -91,7 +102,28 @@ func executeCreateTable(client dynamodbiface.DynamoDBAPI) error {
 	return nil
 }
 
-func executePutItem(client dynamodbiface.DynamoDBAPI) error {
+func executeDeleteTable() error {
+	client, err := initTableClient()
+	if err != nil {
+		return err
+	}
+
+	in := &dynamodb.DeleteTableInput{TableName: aws.String(table)}
+	out, err := client.DeleteTable(in)
+	if err != nil {
+		return err
+	}
+	writeVerbose(out)
+	return nil
+}
+
+func executePutItem() error {
+	client, err := initItemClient()
+	if err != nil {
+		os.Stderr.WriteString(fmt.Sprintf("failed to initialize client: %v\n", err))
+		return err
+	}
+
 	for i := 0; i < pkMax; i++ {
 		for j := 0; j < skMax; j++ {
 			item := map[string]*dynamodb.AttributeValue{
@@ -113,7 +145,13 @@ func executePutItem(client dynamodbiface.DynamoDBAPI) error {
 	return nil
 }
 
-func executeGetItem(client dynamodbiface.DynamoDBAPI) error {
+func executeGetItem() error {
+	client, err := initItemClient()
+	if err != nil {
+		os.Stderr.WriteString(fmt.Sprintf("failed to initialize client: %v\n", err))
+		return err
+	}
+
 	st := time.Now()
 	for c := 0; c < iterations; c++ {
 		for i := 0; i < pkMax; i++ {
@@ -139,7 +177,13 @@ func executeGetItem(client dynamodbiface.DynamoDBAPI) error {
 	return nil
 }
 
-func executeQuery(client dynamodbiface.DynamoDBAPI) error {
+func executeQuery() error {
+	client, err := initItemClient()
+	if err != nil {
+		os.Stderr.WriteString(fmt.Sprintf("failed to initialize client: %v\n", err))
+		return err
+	}
+
 	st := time.Now()
 	for c := 0; c < iterations; c++ {
 		in := &dynamodb.QueryInput{
@@ -162,7 +206,13 @@ func executeQuery(client dynamodbiface.DynamoDBAPI) error {
 	return nil
 }
 
-func executeScan(client dynamodbiface.DynamoDBAPI) error {
+func executeScan() error {
+	client, err := initItemClient()
+	if err != nil {
+		os.Stderr.WriteString(fmt.Sprintf("failed to initialize client: %v\n", err))
+		return err
+	}
+
 	st := time.Now()
 	for c := 0; c < iterations; c++ {
 		in := &dynamodb.ScanInput{TableName: aws.String(table)}
@@ -177,30 +227,27 @@ func executeScan(client dynamodbiface.DynamoDBAPI) error {
 	return nil
 }
 
-func executeDeleteTable(client dynamodbiface.DynamoDBAPI) error {
-	in := &dynamodb.DeleteTableInput{TableName: aws.String(table)}
-	out, err := client.DeleteTable(in)
-	if err != nil {
-		return err
-	}
-	writeVerbose(out)
-	return nil
-}
-
 func writeVerbose(o interface{}) {
 	if verbose != nil && *verbose {
 		os.Stdout.WriteString(fmt.Sprintf("%v\n", o))
 	}
 }
 
-func initClient() (dynamodbiface.DynamoDBAPI, error) {
+func initTableClient() (tableClient, error) {
+	if *service == "dax" {
+		return nil, fmt.Errorf("for table operations use service 'dynamodb'")
+	}
+	return ddbClient(*region)
+}
+
+func initItemClient() (itemClient, error) {
 	if *service == "dax" {
 		return daxClient(*endpoint, *region)
 	}
 	return ddbClient(*region)
 }
 
-func ddbClient(region string) (dynamodbiface.DynamoDBAPI, error) {
+func ddbClient(region string) (*dynamodb.DynamoDB, error) {
 	sess, err := session.NewSession(&aws.Config{
 		Region: aws.String(region)},
 	)
@@ -210,7 +257,7 @@ func ddbClient(region string) (dynamodbiface.DynamoDBAPI, error) {
 	return dynamodb.New(sess), nil
 }
 
-func daxClient(endpoint, region string) (dynamodbiface.DynamoDBAPI, error) {
+func daxClient(endpoint, region string) (itemClient, error) {
 	cfg := dax.DefaultConfig()
 	cfg.HostPorts = []string{endpoint}
 	cfg.Region = region
@@ -221,15 +268,12 @@ func validate() error {
 	if service == nil || !contains(*service, services) {
 		return fmt.Errorf("service should be one of [%s]", strings.Join(services, " | "))
 	}
-	if command == nil || !contains(*command, commands) {
-		return fmt.Errorf("command should be one of [%s]", strings.Join(commands, " | "))
+	if _, ok := commandMap[*command]; !ok {
+		return fmt.Errorf("command should be one of [%s]", commandsMsg)
 	}
 	if *service == "dax" {
 		if endpoint == nil || len(*endpoint) == 0 {
 			return fmt.Errorf("endpoint should be set for 'dax' service")
-		}
-		if *command == "create-table" || *command == "delete-table" {
-			return fmt.Errorf("service 'dax' does not support table operations, use service 'dynamodb'")
 		}
 	}
 	return nil
