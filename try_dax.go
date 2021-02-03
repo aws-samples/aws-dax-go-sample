@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/aws/aws-dax-go/dax"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"os"
@@ -26,7 +27,7 @@ type itemClient interface {
 
 var services = []string{"dynamodb", "dax"}
 
-var commandMap = map[string]func() error {
+var commandMap = map[string]func() error{
 	"create-table": executeCreateTable,
 	"delete-table": executeDeleteTable,
 	"put-item":     executePutItem,
@@ -44,10 +45,11 @@ func listOfKeys(m map[string]func() error) []string {
 	}
 	return keys
 }
+
 var commandsMsg = strings.Join(listOfKeys(commandMap), " | ")
 
 var service = flag.String("service", "dynamodb", "dax | dynamodb")
-var region = flag.String("region", "us-west-2", "aws region")
+var region *string
 var endpoint = flag.String("endpoint", "", "dax cluster endpoint")
 var command = flag.String("command", "", commandsMsg)
 var verbose = flag.Bool("verbose", false, "verbose output")
@@ -62,15 +64,39 @@ const (
 )
 
 func main() {
-	flag.Parse()
-	if err := validate(); err != nil {
-		os.Stderr.WriteString(fmt.Sprintf("invalid input: %v\n", err))
-		return
+	if err := initializeOptions(); err != nil {
+		os.Exit(1)
 	}
 
 	if err := commandMap[*command](); err != nil {
 		os.Stderr.WriteString(fmt.Sprintf("failed to execute command: %v\n", err))
+		os.Exit(1)
 	}
+}
+
+func initializeOptions() error {
+	// Detect region from the EC2 metadata service
+	sess, err := session.NewSession(&aws.Config{})
+	if err != nil {
+		os.Stderr.WriteString(fmt.Sprintf("%v\n", err))
+		return err
+	}
+	md := ec2metadata.New(sess)
+	detectedRegion, err := md.Region()
+	if err != nil {
+		os.Stderr.WriteString(fmt.Sprintf("Unable to detect region: %v\n", err))
+		return err
+	}
+	// Override detected region from the command line
+	region = flag.String("region", detectedRegion, "AWS region")
+
+	flag.Parse()
+
+	if err := validate(); err != nil {
+		os.Stderr.WriteString(fmt.Sprintf("invalid input: %v\n", err))
+		return err
+	}
+	return nil
 }
 
 func executeCreateTable() error {
